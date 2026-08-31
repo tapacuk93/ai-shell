@@ -1,29 +1,58 @@
 import AppKit
 import ApplicationServices
 
-/// A snapshot of what's on the terminal screen when the user triple-clicks.
+/// A snapshot of the terminal when the user ⌘-clicks: the visible screen, plus each earlier
+/// screenful of whatever scrollback the Accessibility API hands over.
 struct TerminalSnapshot {
     let appName: String
-    let screen: String
     /// True when the visible screen looks like an interactive Claude Code session.
     let claudeSession: Bool
+    /// Newest first — `screens[0]` is what is on screen now.
+    let screens: [String]
+    /// Which of them is being sent. 0 is the visible screen.
+    let screensBack: Int
 
+    var screen: String { screensBack < screens.count ? screens[screensBack] : "" }
     var isEmpty: Bool { screen.trimmed.isEmpty }
+
+    /// One screenful further back, or nil once the scrollback runs out. A declined request is
+    /// retried against this rather than against nothing: the word was clicked in a context,
+    /// and the context that explains it is usually just above whatever tripped the classifier.
+    func steppedBack() -> TerminalSnapshot? {
+        let next = screensBack + 1
+        guard next < screens.count else { return nil }
+        return TerminalSnapshot(appName: appName, claudeSession: claudeSession, screens: screens, screensBack: next)
+    }
 }
 
 enum TerminalContext {
 
-    /// Pulls the visible text of the frontmost terminal window via the Accessibility API.
-    static func capture(limit: Int = 6000) -> TerminalSnapshot {
+    /// Pulls the visible text of the frontmost terminal window via the Accessibility API,
+    /// sliced into screenfuls from the end so a declined request can step back through them.
+    static func capture(screenLength: Int = 6000, maxScreens: Int = 5) -> TerminalSnapshot {
         let app = NSWorkspace.shared.frontmostApplication
         let name = app?.localizedName ?? "Terminal"
-        var text = focusedText() ?? ""
+        let text = focusedText() ?? ""
 
-        if text.count > limit {
-            text = String(text.suffix(limit))
+        var screens: [String] = []
+        var remaining = Substring(text)
+        while !remaining.isEmpty, screens.count < maxScreens {
+            var chunk = remaining.suffix(screenLength)
+            remaining = remaining.dropLast(chunk.count)
+            // A window that opens mid-line reads as garbage, so start it at the next one.
+            if !remaining.isEmpty, let newline = chunk.firstIndex(of: "\n") {
+                chunk = chunk[chunk.index(after: newline)...]
+            }
+            let window = String(chunk)
+            guard !window.trimmed.isEmpty else { continue }
+            screens.append(window)
         }
 
-        return TerminalSnapshot(appName: name, screen: text, claudeSession: looksLikeClaudeCode(text))
+        return TerminalSnapshot(
+            appName: name,
+            claudeSession: looksLikeClaudeCode(screens.first ?? ""),
+            screens: screens,
+            screensBack: 0)
     }
 
     // MARK: - Accessibility traversal

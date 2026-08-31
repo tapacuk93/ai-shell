@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Context for the current popup, so chips can be re-looked-up without re-reading the screen.
     private var currentLine = ""
-    private var currentSnapshot = TerminalSnapshot(appName: "", screen: "", claudeSession: false)
+    private var currentSnapshot = TerminalSnapshot(appName: "", claudeSession: false, screens: [], screensBack: 0)
     private var requestID = 0
 
     // MARK: - Lifecycle
@@ -296,7 +296,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         currentSnapshot = TerminalContext.capture()
         currentLine = line
 
-        panel.showLoading(term: word, at: point)
         define(token: word, line: line, at: point, tokens: tokens ?? Tokenizer.tokens(in: line))
     }
 
@@ -306,34 +305,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return CGPoint(x: point.x, y: primaryHeight - point.y)
     }
 
+    /// The panel shows one thing: Claude's reading of the word on this screen. The offline
+    /// chain is kept only for when there is no answer to show — no key, the toggle off, or a
+    /// failed request — so a ⌘-click is never met with an empty popup.
     private func define(token: String, line: String, at point: NSPoint?, tokens: [String]? = nil) {
         requestID += 1
         let id = requestID
         let chips = tokens ?? Tokenizer.tokens(in: line)
-        let askClaude = Settings.useClaude && ApiKey.current() != nil
+
+        guard Settings.useClaude, ApiKey.current() != nil else {
+            Log.event("no Claude for \(token) (useClaude=\(Settings.useClaude), key=\(ApiKey.current() != nil))")
+            defineOffline(token: token, chips: chips, at: point, note: nil)
+            return
+        }
+
+        panel.showLoading(term: token, message: "Asking Claude…", tokens: chips, at: point)
+
+        // Only the glossary feeds the prompt: it is a table lookup, whereas the rest of the
+        // offline chain would put a process launch in front of every request.
+        ClaudeClient.explain(
+            token: token,
+            line: line,
+            hint: Lookup.hint(for: token),
+            snapshot: currentSnapshot
+        ) { [weak self] result in
+            guard let self, id == self.requestID else { return }
+            switch result {
+            case .success(let answer):
+                Log.event("claude explained \(token) (\(answer.text.count) chars, \(answer.screensBack) back)")
+                self.panel.show(
+                    term: token,
+                    badge: "claude",
+                    source: AppDelegate.sourceLabel(for: answer),
+                    body: answer.text, tokens: chips, at: nil)
+            case .failure(let error):
+                Log.event("claude failed: \(error.localizedDescription) — falling back offline")
+                self.defineOffline(token: token, chips: chips, at: nil, note: error.localizedDescription)
+            }
+        }
+    }
+
+    /// An answer read off an earlier screenful looks identical to one read off the current
+    /// screen, and the difference is the whole point of the app — so the header names it.
+    private static func sourceLabel(for answer: ClaudeClient.Answer) -> String {
+        guard answer.usedScreen else { return "no screen context" }
+        guard answer.screensBack > 0 else { return ClaudeClient.model }
+        return "\(answer.screensBack) screen\(answer.screensBack == 1 ? "" : "s") back"
+    }
+
+    private func defineOffline(token: String, chips: [String], at point: NSPoint?, note: String?) {
+        let id = requestID
+        panel.showLoading(term: token, message: "Looking up…", tokens: chips, at: point)
 
         Lookup.define(token) { [weak self] definition in
             guard let self, id == self.requestID else { return }
-            Log.event("defined \(token) via \(definition.source) (claude=\(askClaude))")
-            self.panel.show(definition, tokens: chips, context: askClaude ? .loading : .hidden, at: point)
-            guard askClaude else { return }
-
-            ClaudeClient.explain(
-                token: token,
-                line: line,
-                localDefinition: definition,
-                snapshot: self.currentSnapshot
-            ) { [weak self] result in
-                guard let self, id == self.requestID else { return }
-                switch result {
-                case .success(let text):
-                    Log.event("claude replied (\(text.count) chars)")
-                    self.panel.setContext(.text(text))
-                case .failure(let error):
-                    Log.event("claude failed: \(error.localizedDescription)")
-                    self.panel.setContext(.error(error.localizedDescription))
-                }
-            }
+            Log.event("defined \(token) offline via \(definition.source)")
+            self.panel.show(
+                term: definition.term,
+                badge: definition.kind,
+                source: definition.source,
+                body: note.map { "\(definition.text)\n\n\($0)" } ?? definition.text,
+                tokens: chips,
+                at: nil)
         }
     }
 }

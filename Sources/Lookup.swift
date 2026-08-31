@@ -18,6 +18,16 @@ enum Lookup {
         }
     }
 
+    /// The glossary layer on its own. It is an in-memory table, so unlike `whatis`, the
+    /// macOS Dictionary and `which` — each of which spawns a process or can block — it costs
+    /// nothing, and can ground Claude's answer without delaying the request.
+    static func hint(for token: String) -> String? {
+        let word = token.trimmed
+        if let entry = Glossary.entry(for: word) { return entry.text }
+        if let flag = Tokenizer.normalizedFlag(word), let entry = Glossary.entry(for: flag) { return entry.text }
+        return nil
+    }
+
     static func define(_ token: String) -> Definition {
         let word = token.trimmed
 

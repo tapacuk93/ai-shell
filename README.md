@@ -3,23 +3,20 @@
 A macOS menu-bar app that explains the word under your pointer when you **⌘-click** it in a
 terminal — including inside TUIs like [Claude Code](https://claude.com/claude-code).
 
-It shows two things at once: an instant offline definition, and — when an Anthropic API key is
-available — a short explanation of what that word means *in the context currently on your
-screen*, based on the visible terminal contents.
+The popup shows one thing: Claude reading that word *in the context currently on your screen*.
+Not a dictionary entry that ignores where you are — what the word means, and what it is doing
+in this command, on this line, in this error.
 
 ```
-┌──────────────────────────────────────────┐
-│ rsync                    COMMAND glossary│
-│                                          │
-│ Remote SYNC — efficiently sync           │
-│ directories, copying only what changed.  │
-│ -av is the common pair.                  │
-│ ─────────────────────────────────────────│
-│ IN THIS TERMINAL · CLAUDE                │
-│ Here it is copying build output to the   │
-│ staging host; --delete would remove      │
-│ files there that no longer exist locally.│
-└──────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│ rsync                    CLAUDE claude-opus │
+│                                             │
+│ Remote SYNC — copies files between          │
+│ directories or hosts, sending only what     │
+│ changed. Here it is copying build output to │
+│ the staging host; --delete would remove     │
+│ files there that no longer exist locally.   │
+└─────────────────────────────────────────────┘
 ```
 
 ## The gesture
@@ -36,13 +33,12 @@ it sounds:
 
 A synthetic-double-click fallback covers terminals that don't answer those queries.
 
-The same ⌘-click works **inside the popup itself** — click any word in the definition or in
-Claude's answer to look that one up, without going back to the terminal. The panel keeps its
+The same ⌘-click works **inside the popup itself** — click any word in Claude's answer to
+look that one up, without going back to the terminal. The panel keeps its
 position and the screen context it was opened with.
 
 The panel is **draggable** — pull it by its background or header to move it aside. Dragging
-starting on the definition or Claude's answer selects text instead, since those stay
-selectable. The next lookup opens a fresh panel at the pointer.
+starting on the answer selects text instead, since it stays selectable. The next lookup opens a fresh panel at the pointer.
 
 **⌘+ / ⌘−** resize the popup while it's open, and the size is remembered. Those two keys are
 swallowed while the panel is showing, so the terminal doesn't zoom its own font at the same
@@ -53,19 +49,30 @@ that. ⌘-clicking a path may open it in Finder. Plain words are unaffected.
 
 ## What it explains
 
-Two layers, shown together:
+Claude is given the word, the line it came from, and the *visible terminal screen*, and answers
+in 2–4 sentences: what the word means, then what it is doing in that specific context — the
+command it belongs to, the error above it, the flag it modifies. If the screen shows an
+interactive **Claude Code** session, the app detects that and says so, and slash commands,
+permission modes and status-line elements are read in that light.
 
-1. **Offline definition** — resolved instantly, in this order:
-   - a built-in glossary of ~190 CLI commands, shell builtins and terminal abbreviations
-     (`awk`, `stdout`, `SIGTERM`, `rc`, `inode`, …), written to be nicer than a man-page summary
-   - `whatis` for anything with a man page (exact page-name matches only)
-   - the macOS Dictionary, for ordinary English words
-   - `which`, plus shape-based guesses for paths, flags and environment variables
-2. **"In this terminal"** — an answer from Claude that reads the *visible terminal screen*
-   and explains the word in that specific context: the command it belongs to, the error above
-   it, the flag it modifies. If the screen shows an interactive **Claude Code** session, the
-   app detects that and tells the model, so slash commands, permission modes and status-line
-   elements are read in that light.
+A built-in glossary of ~190 CLI commands, shell builtins and terminal abbreviations (`awk`,
+`stdout`, `SIGTERM`, `rc`, `inode`, …) is passed along as a reference gloss when it has an
+entry. It is a table lookup, so it grounds the answer without delaying the request.
+
+**Declined requests.** The safety classifiers judge the request as a whole, and a terminal
+screen can carry security-shaped text — a pentest tool's output, an exploit in a file being
+edited, a log full of auth failures — that the clicked word has nothing to do with. Rather than
+give up on the context, a refusal is retried one screenful further back, then another, up to
+five screens of scrollback: the lines that explain the word usually sit just above whatever
+tripped the classifier. Whichever screenful answered is named in the header (`2 screens back`),
+since an answer read off older scrollback looks identical to one read off the current screen.
+If every screenful is declined, the offline definition stands in.
+
+**When there is no answer to show** — no API key, *Explain with Claude* turned off, or a failed
+request — the panel falls back to an offline definition rather than nothing: the glossary, then
+`whatis` for anything with a man page, the macOS Dictionary for ordinary English words, `which`,
+and shape-based guesses for paths, flags and environment variables. A failed request shows the
+reason underneath.
 
 Other words on the clicked line appear as chips at the bottom of the panel — click one to
 look it up without touching the terminal again.
@@ -110,7 +117,8 @@ deletes it; **Reload API key** re-reads all sources after you edit a shell file.
 Because the app is ad-hoc signed, its signature changes on every rebuild, so macOS may ask you
 to allow Keychain access again after `./build.sh`. Allow it once per build.
 
-Without a key everything still works — you just get the offline definition only.
+Without a key the app still answers, but from the offline chain only — see *What it
+explains* above.
 
 Requests go to `POST /v1/messages` with `claude-opus-5`, thinking disabled at `low` effort and
 `max_tokens: 600`, which is what keeps a popup answer under a couple of seconds.
@@ -122,7 +130,7 @@ Requests go to `POST /v1/messages` with `claude-opus-5`, thinking disabled at `l
 | Enabled | Master switch |
 | Terminal apps only | Only react in Terminal, iTerm2, Warp, kitty, Alacritty, WezTerm, Ghostty, Hyper, … (on by default, so the gesture is inert in other apps) |
 | Use ⌘C when needed | Allows the clipboard fallback when a terminal doesn't expose its selection over the Accessibility API. The previous clipboard contents are restored |
-| Explain with Claude | Turns the contextual layer on or off |
+| Explain with Claude | Off falls the panel back to offline definitions only |
 
 ## Dismissing the panel
 
@@ -139,7 +147,7 @@ leaves it alone — so it can sit there while you keep working.
 | `Sources/TerminalContext.swift` | Captures the visible screen; detects a Claude Code session |
 | `Sources/Tokenizer.swift` | Strips prompt decoration and picks the interesting token from a line |
 | `Sources/Glossary.swift` | The built-in command/abbreviation table |
-| `Sources/Lookup.swift` | Offline resolution chain + short-lived helper processes |
+| `Sources/Lookup.swift` | The reference gloss, and the offline fallback chain |
 | `Sources/ClaudeClient.swift` | Raw-HTTP Messages API client (Swift has no official SDK) |
 | `Sources/DefinitionPanel.swift` | The floating non-activating panel, and its ⌘+/⌘− scaling |
 | `Sources/ScaleHotkeys.swift` | Event tap that claims ⌘+/⌘− while the panel is open |

@@ -7,25 +7,13 @@ import AppKit
 /// which ⌘+ / ⌘− adjust and which persists between launches.
 final class DefinitionPanel: NSObject {
 
-    /// The Claude-powered, screen-aware section under the offline definition.
-    enum ContextState {
-        case hidden
-        case loading
-        case text(String)
-        case error(String)
-    }
-
     private var panel: NSPanel?
     private var container: NSVisualEffectView!
     private var termLabel: NSTextField!
     private var badgeLabel: NSTextField!
     private var sourceLabel: NSTextField!
     private var bodyLabel: NSTextField!
-    private var divider: NSBox!
-    private var contextCaption: NSTextField!
-    private var contextLabel: NSTextField!
     private var chipsView: NSView!
-    private var contextState: ContextState = .hidden
 
     private var monitors: [Any] = []
 
@@ -38,30 +26,27 @@ final class DefinitionPanel: NSObject {
 
     // MARK: - Public
 
-    func showLoading(term: String, at point: NSPoint) {
-        build()
-        tokens = []
-        contextState = .hidden
-        apply(term: term, kind: "…", source: "", body: "Looking up…")
-        position(at: point)
-        present()
+    /// The waiting state, shown while the answer is on its way. A `nil` point leaves the
+    /// panel where it is, which is what a chip tap wants.
+    func showLoading(term: String, message: String, tokens: [String], at point: NSPoint?) {
+        show(term: term, badge: "…", source: "", body: message, dimmed: true, tokens: tokens, at: point)
     }
 
-    func show(_ definition: Definition, tokens: [String], context: ContextState, at point: NSPoint?) {
+    /// The panel has a single body: Claude's answer, or — when Claude can't answer — the
+    /// offline definition standing in for it.
+    func show(term: String, badge: String, source: String, body: String,
+              dimmed: Bool = false, tokens: [String], at point: NSPoint?) {
         build()
         self.tokens = tokens
-        contextState = context
-        apply(term: definition.term, kind: definition.kind, source: definition.source, body: definition.text)
-        if let point { position(at: point) } else { layoutContents(keepingTopLeft: true) }
-        present()
-    }
-
-    /// Updates only the Claude section — used when the API answer arrives after the panel is up.
-    func setContext(_ state: ContextState) {
-        guard panel != nil, isVisible else { return }
-        contextState = state
-        applyContext()
+        termLabel.stringValue = term
+        badgeLabel.stringValue = " \(badge.uppercased()) "
+        sourceLabel.stringValue = source
+        bodyLabel.stringValue = body
+        bodyLabel.textColor = dimmed ? .secondaryLabelColor : .labelColor
+        rebuildChips()
         layoutContents(keepingTopLeft: true)
+        if let point { position(at: point) }
+        present()
     }
 
     /// ⌘+ / ⌘− while the panel is showing.
@@ -115,19 +100,9 @@ final class DefinitionPanel: NSObject {
         bodyLabel.textColor = .labelColor
         bodyLabel.isSelectable = true
 
-        divider = NSBox()
-        divider.boxType = .separator
-
-        contextCaption = NSTextField(labelWithString: "")
-        contextCaption.textColor = .secondaryLabelColor
-
-        contextLabel = NSTextField(wrappingLabelWithString: "")
-        contextLabel.textColor = .labelColor
-        contextLabel.isSelectable = true
-
         chipsView = NSView()
 
-        for view in [termLabel, badgeLabel, sourceLabel, bodyLabel, divider, contextCaption, contextLabel, chipsView] as [NSView] {
+        for view in [termLabel, badgeLabel, sourceLabel, bodyLabel, chipsView] as [NSView] {
             effect.addSubview(view)
         }
 
@@ -145,8 +120,8 @@ final class DefinitionPanel: NSObject {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.animationBehavior = .utilityWindow
-        // Drag the panel by its background or header to move it out of the way. The body and
-        // context labels stay selectable, so a drag starting on those selects text instead.
+        // Drag the panel by its background or header to move it out of the way. The body
+        // label stays selectable, so a drag starting on it selects text instead.
         // Moving it is free — the panel has no dismissal timer to disturb.
         panel.isMovableByWindowBackground = true
         self.panel = panel
@@ -161,47 +136,10 @@ final class DefinitionPanel: NSObject {
         badgeLabel.layer?.cornerRadius = 4 * scale
         sourceLabel.font = .systemFont(ofSize: 10 * scale)
         bodyLabel.font = .systemFont(ofSize: 12.5 * scale)
-        contextCaption.font = .systemFont(ofSize: 10 * scale, weight: .semibold)
-        contextLabel.font = .systemFont(ofSize: 12.5 * scale)
         container.layer?.cornerRadius = 12 * scale
     }
 
     // MARK: - Content
-
-    private func apply(term: String, kind: String, source: String, body: String) {
-        termLabel.stringValue = term
-        badgeLabel.stringValue = " \(kind.uppercased()) "
-        sourceLabel.stringValue = source
-        bodyLabel.stringValue = body
-        applyContext()
-        rebuildChips()
-        layoutContents(keepingTopLeft: true)
-    }
-
-    private func applyContext() {
-        switch contextState {
-        case .hidden:
-            contextCaption.stringValue = ""
-            contextLabel.stringValue = ""
-        case .loading:
-            contextCaption.stringValue = "IN THIS TERMINAL"
-            contextLabel.stringValue = "Asking Claude…"
-            contextLabel.textColor = .secondaryLabelColor
-        case .text(let text):
-            contextCaption.stringValue = "IN THIS TERMINAL · CLAUDE"
-            contextLabel.stringValue = text
-            contextLabel.textColor = .labelColor
-        case .error(let message):
-            contextCaption.stringValue = "IN THIS TERMINAL"
-            contextLabel.stringValue = message
-            contextLabel.textColor = .secondaryLabelColor
-        }
-
-        let visible = !contextLabel.stringValue.isEmpty
-        divider.isHidden = !visible
-        contextCaption.isHidden = !visible
-        contextLabel.isHidden = !visible
-    }
 
     private func rebuildChips() {
         chipsView.subviews.forEach { $0.removeFromSuperview() }
@@ -249,24 +187,15 @@ final class DefinitionPanel: NSObject {
 
         let badgeSize = badgeLabel.intrinsicContentSize
         let badgeWidth = badgeSize.width + 6 * scale
-        let sourceWidth = min(sourceLabel.intrinsicContentSize.width + 2 * scale, 120 * scale)
+        let sourceWidth = min(sourceLabel.intrinsicContentSize.width + 2 * scale, 165 * scale)
         let termWidth = max(60 * scale, contentWidth - badgeWidth - sourceWidth - 12 * scale)
 
         bodyLabel.preferredMaxLayoutWidth = contentWidth
         let bodyHeight = bodyLabel.sizeThatFits(NSSize(width: contentWidth, height: .greatestFiniteMagnitude)).height
 
-        let contextVisible = !contextLabel.isHidden
-        var contextHeight: CGFloat = 0
-        var contextBodyHeight: CGFloat = 0
-        if contextVisible {
-            contextLabel.preferredMaxLayoutWidth = contentWidth
-            contextBodyHeight = contextLabel.sizeThatFits(NSSize(width: contentWidth, height: .greatestFiniteMagnitude)).height
-            contextHeight = (12 + 1 + 10 + 14 + 4) * scale + contextBodyHeight
-        }
-
         let chipsHeight = chipsView.subviews.isEmpty ? 0 : chipsView.frame.height + 10 * scale
         let headerHeight = 20 * scale
-        let totalHeight = padding + headerHeight + 8 * scale + bodyHeight + contextHeight + chipsHeight + padding
+        let totalHeight = padding + headerHeight + 8 * scale + bodyHeight + chipsHeight + padding
 
         var y = totalHeight - padding - headerHeight
         termLabel.frame = NSRect(x: padding, y: y, width: termWidth, height: headerHeight)
@@ -275,15 +204,6 @@ final class DefinitionPanel: NSObject {
 
         y -= 8 * scale + bodyHeight
         bodyLabel.frame = NSRect(x: padding, y: y, width: contentWidth, height: bodyHeight)
-
-        if contextVisible {
-            y -= (12 + 1) * scale
-            divider.frame = NSRect(x: padding, y: y, width: contentWidth, height: 1)
-            y -= (10 + 14) * scale
-            contextCaption.frame = NSRect(x: padding, y: y, width: contentWidth, height: 14 * scale)
-            y -= 4 * scale + contextBodyHeight
-            contextLabel.frame = NSRect(x: padding, y: y, width: contentWidth, height: contextBodyHeight)
-        }
 
         if chipsHeight > 0 {
             chipsView.frame.origin = NSPoint(x: padding, y: padding)
@@ -381,7 +301,7 @@ final class DefinitionPanel: NSObject {
             }
 
             // ⌘-click inside the panel looks up that word too, so you can follow a term from
-            // the definition or from Claude's answer without going back to the terminal.
+            // the answer without going back to the terminal.
             guard event.window === self.panel,
                   event.modifierFlags.contains(.command),
                   let word = self.word(at: event.locationInWindow)
@@ -402,7 +322,7 @@ final class DefinitionPanel: NSObject {
 
     /// Which word sits under `windowPoint` in one of the panel's labels, if any.
     private func word(at windowPoint: NSPoint) -> String? {
-        for field in [bodyLabel, contextLabel, termLabel].compactMap({ $0 }) where !field.isHidden {
+        for field in [bodyLabel, termLabel].compactMap({ $0 }) where !field.isHidden {
             let local = field.convert(windowPoint, from: nil)
             guard field.bounds.contains(local) else { continue }
             guard let index = characterIndex(in: field, at: local),
