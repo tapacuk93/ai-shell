@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Context for the current popup, so chips can be re-looked-up without re-reading the screen.
     private var currentLine = ""
-    private var currentSnapshot = TerminalSnapshot(appName: "", claudeSession: false, screens: [], screensBack: 0)
+    private var currentSnapshot = TerminalSnapshot(appName: "", claudeSession: false, history: "")
     private var requestID = 0
 
     // MARK: - Lifecycle
@@ -332,7 +332,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self, id == self.requestID else { return }
             switch result {
             case .success(let answer):
-                Log.event("claude explained \(token) (\(answer.text.count) chars, \(answer.screensBack) back)")
+                Log.event("claude explained \(token) (\(answer.text.count) chars, \(answer.charactersBack) back)")
                 self.panel.show(
                     term: token,
                     badge: "claude",
@@ -345,12 +345,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// An answer read off an earlier screenful looks identical to one read off the current
-    /// screen, and the difference is the whole point of the app — so the header names it.
+    /// An answer read off older scrollback looks identical to one read off the current screen,
+    /// and the difference is the whole point of the app — so the header names the distance.
     private static func sourceLabel(for answer: ClaudeClient.Answer) -> String {
         guard answer.usedScreen else { return "no screen context" }
-        guard answer.screensBack > 0 else { return ClaudeClient.model }
-        return "\(answer.screensBack) screen\(answer.screensBack == 1 ? "" : "s") back"
+        guard answer.charactersBack > 0 else { return ClaudeClient.model }
+        return "\(answer.charactersBack / 1000)k chars earlier"
     }
 
     private func defineOffline(token: String, chips: [String], at point: NSPoint?, note: String?) {

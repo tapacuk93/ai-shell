@@ -1,58 +1,94 @@
 import AppKit
 import ApplicationServices
 
-/// A snapshot of the terminal when the user ⌘-clicks: the visible screen, plus each earlier
-/// screenful of whatever scrollback the Accessibility API hands over.
+/// A snapshot of the terminal when the user ⌘-clicks: a thousand characters of text, taken
+/// from somewhere in whatever the Accessibility API hands over. `offset` slides that window
+/// back through the scrollback without changing its size.
 struct TerminalSnapshot {
     let appName: String
     /// True when the visible screen looks like an interactive Claude Code session.
     let claudeSession: Bool
-    /// Newest first — `screens[0]` is what is on screen now.
-    let screens: [String]
-    /// Which of them is being sent. 0 is the visible screen.
-    let screensBack: Int
+    /// The visible screen plus whatever scrollback came with it, oldest first.
+    let history: String
+    /// Characters between the end of the history and the end of the window being sent.
+    let offset: Int
+    /// The window itself — resolved once, since reading it walks the string.
+    let screen: String
 
-    var screen: String { screensBack < screens.count ? screens[screensBack] : "" }
+    /// How much text goes in one request, and how far the ladder can climb. The first retry
+    /// jumps `firstStep` windows back and every one after that doubles — 0, 3, 6, 12, 24, 48,
+    /// 96, 192 windows — so eight rungs reach a hundred and ninety-two thousand characters
+    /// back. The windows either side of the current one are skipped: they are usually a
+    /// continuation of the same work, carrying the same text that got the request declined.
+    static let windowLength = 1000
+    static let firstStep = 3
+    static let maxRungs = 8
+
+    /// The furthest rung, in characters.
+    static var deepestOffset: Int { (windowLength * firstStep) << (maxRungs - 2) }
+
+    init(appName: String, claudeSession: Bool, history: String, offset: Int = 0) {
+        self.appName = appName
+        self.claudeSession = claudeSession
+        self.history = history
+        self.offset = offset
+        self.screen = TerminalSnapshot.window(of: history, endingBack: offset)
+    }
+
     var isEmpty: Bool { screen.trimmed.isEmpty }
 
-    /// One screenful further back, or nil once the scrollback runs out. A declined request is
-    /// retried against this rather than against nothing: the word was clicked in a context,
-    /// and the context that explains it is usually just above whatever tripped the classifier.
+    /// How far back the window sits, in windows. 0 is the text on screen now.
+    var windowsBack: Int { offset / TerminalSnapshot.windowLength }
+
+    /// The next rung: twice as far back as this one. A declined request is retried against
+    /// this rather than against nothing — the word was clicked in a context, and the context
+    /// that explains it is usually above whatever tripped the classifier. Nil once the
+    /// scrollback runs out, or once the ladder has climbed as far as it goes.
     func steppedBack() -> TerminalSnapshot? {
-        let next = screensBack + 1
-        guard next < screens.count else { return nil }
-        return TerminalSnapshot(appName: appName, claudeSession: claudeSession, screens: screens, screensBack: next)
+        let next = offset == 0
+            ? TerminalSnapshot.windowLength * TerminalSnapshot.firstStep
+            : offset * 2
+        guard next < history.count, next <= TerminalSnapshot.deepestOffset else { return nil }
+
+        let stepped = TerminalSnapshot(
+            appName: appName, claudeSession: claudeSession, history: history, offset: next)
+        return stepped.isEmpty ? nil : stepped
+    }
+
+    /// One window of `history`, ending `back` characters before its end.
+    static func window(of history: String, endingBack back: Int) -> String {
+        guard back < history.count else { return "" }
+        let end = history.index(history.endIndex, offsetBy: -back)
+        let start = history.index(end, offsetBy: -windowLength, limitedBy: history.startIndex)
+            ?? history.startIndex
+
+        var window = history[start..<end]
+        // Half a line at either edge reads as garbage, so trim to whole ones — except at the
+        // ends of the history, where nothing was cut in the first place.
+        if start != history.startIndex, let newline = window.firstIndex(of: "\n") {
+            window = window[window.index(after: newline)...]
+        }
+        if end != history.endIndex, let newline = window.lastIndex(of: "\n") {
+            window = window[..<newline]
+        }
+        return String(window)
     }
 }
 
 enum TerminalContext {
 
-    /// Pulls the visible text of the frontmost terminal window via the Accessibility API,
-    /// sliced into screenfuls from the end so a declined request can step back through them.
-    static func capture(screenLength: Int = 6000, maxScreens: Int = 5) -> TerminalSnapshot {
+    /// Pulls the text of the frontmost terminal window via the Accessibility API: the visible
+    /// screen, and whatever scrollback comes with it for the retry ladder to climb into.
+    static func capture(maxHistory: Int = 220_000) -> TerminalSnapshot {
         let app = NSWorkspace.shared.frontmostApplication
         let name = app?.localizedName ?? "Terminal"
         let text = focusedText() ?? ""
-
-        var screens: [String] = []
-        var remaining = Substring(text)
-        while !remaining.isEmpty, screens.count < maxScreens {
-            var chunk = remaining.suffix(screenLength)
-            remaining = remaining.dropLast(chunk.count)
-            // A window that opens mid-line reads as garbage, so start it at the next one.
-            if !remaining.isEmpty, let newline = chunk.firstIndex(of: "\n") {
-                chunk = chunk[chunk.index(after: newline)...]
-            }
-            let window = String(chunk)
-            guard !window.trimmed.isEmpty else { continue }
-            screens.append(window)
-        }
+        let history = text.count > maxHistory ? String(text.suffix(maxHistory)) : text
 
         return TerminalSnapshot(
             appName: name,
-            claudeSession: looksLikeClaudeCode(screens.first ?? ""),
-            screens: screens,
-            screensBack: 0)
+            claudeSession: looksLikeClaudeCode(String(history.suffix(6000))),
+            history: history)
     }
 
     // MARK: - Accessibility traversal

@@ -8,15 +8,15 @@ Not a dictionary entry that ignores where you are — what the word means, and w
 in this command, on this line, in this error.
 
 ```
-┌─────────────────────────────────────────────┐
-│ rsync                    CLAUDE claude-opus │
-│                                             │
-│ Remote SYNC — copies files between          │
-│ directories or hosts, sending only what     │
-│ changed. Here it is copying build output to │
-│ the staging host; --delete would remove     │
-│ files there that no longer exist locally.   │
-└─────────────────────────────────────────────┘
+┌───────────────────────────────────────────┐
+│ rsync                  CLAUDE claude-opus │
+│                                           │
+│ Remote SYNC: here it is copying build     │
+│ output to the staging host, sending only  │
+│ the parts that changed rather than the    │
+│ whole tree. --delete would also remove    │
+│ files there that no longer exist locally. │
+└───────────────────────────────────────────┘
 ```
 
 ## The gesture
@@ -49,9 +49,11 @@ that. ⌘-clicking a path may open it in Finder. Plain words are unaffected.
 
 ## What it explains
 
-Claude is given the word, the line it came from, and the *visible terminal screen*, and answers
-in 2–4 sentences: what the word means, then what it is doing in that specific context — the
-command it belongs to, the error above it, the flag it modifies. If the screen shows an
+Claude is given the word, the line it came from, and a thousand characters of *what is on the
+terminal screen* around it, and answers
+in 2–4 sentences. What the word is and what it is doing here come as one explanation rather
+than a definition with a “here it is…” sentence bolted on: the meaning is carried through the
+command it belongs to, the flag it modifies, the error it appears in. If the screen shows an
 interactive **Claude Code** session, the app detects that and says so, and slash commands,
 permission modes and status-line elements are read in that light.
 
@@ -62,11 +64,17 @@ entry. It is a table lookup, so it grounds the answer without delaying the reque
 **Declined requests.** The safety classifiers judge the request as a whole, and a terminal
 screen can carry security-shaped text — a pentest tool's output, an exploit in a file being
 edited, a log full of auth failures — that the clicked word has nothing to do with. Rather than
-give up on the context, a refusal is retried one screenful further back, then another, up to
-five screens of scrollback: the lines that explain the word usually sit just above whatever
-tripped the classifier. Whichever screenful answered is named in the header (`2 screens back`),
-since an answer read off older scrollback looks identical to one read off the current screen.
-If every screenful is declined, the offline definition stands in.
+give up on the context, a refusal is retried against an earlier screenful — and each rung of
+that ladder jumps back twice as far as the last: 3k, 6k, 12k, 24k, 48k, 96k, then 192k
+characters. The text either side of the current window is skipped, since it is usually a
+continuation of the same work and carries whatever got the request declined. Eight requests
+therefore reach a hundred and ninety-two thousand characters back. Whichever window answered is
+named in the header (`24k chars earlier`), since an answer read off older scrollback looks
+identical to one read off the current screen. If every rung is declined, the offline definition
+stands in.
+
+How far the ladder actually reaches depends on the terminal: it can only climb through the text
+the Accessibility API exposes, and some terminals hand over the visible screen and nothing more.
 
 **When there is no answer to show** — no API key, *Explain with Claude* turned off, or a failed
 request — the panel falls back to an offline definition rather than nothing: the glossary, then

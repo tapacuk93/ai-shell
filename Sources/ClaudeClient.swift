@@ -30,9 +30,9 @@ enum ClaudeClient {
 
     struct Answer {
         let text: String
-        /// How far back the screen context came from: 0 is what is on screen now, higher means
-        /// the classifier declined that far and the retry stepped back through the scrollback.
-        let screensBack: Int
+        /// How many characters back the window came from: 0 is the text on screen now, higher
+        /// means the classifier declined that far and the retry stepped back through scrollback.
+        let charactersBack: Int
         /// False when the terminal exposed no text at all, so this is a plain definition.
         let usedScreen: Bool
     }
@@ -42,8 +42,9 @@ enum ClaudeClient {
     /// A terminal screen can carry security-shaped text — a pentest tool's output, an exploit
     /// in a file being edited, a log full of auth failures — that the clicked word has nothing
     /// to do with, and the safety classifiers judge the request as a whole. So a refusal is
-    /// retried a screenful further back, then another, until the scrollback runs out: the
-    /// context that explains the word is usually just above whatever tripped the classifier.
+    /// retried against an earlier window, each rung twice as far back as the last, until the
+    /// scrollback runs out: the context that explains the word is usually just above whatever
+    /// tripped the classifier.
     static func explain(
         token: String,
         line: String,
@@ -56,7 +57,7 @@ enum ClaudeClient {
             case .success(let text):
                 completion(.success(Answer(
                     text: text,
-                    screensBack: snapshot.screensBack,
+                    charactersBack: snapshot.offset,
                     usedScreen: !snapshot.isEmpty)))
 
             case .failure(let error):
@@ -66,7 +67,7 @@ enum ClaudeClient {
                     completion(.failure(error))
                     return
                 }
-                Log.event("refused (\(category)) — retrying \(earlier.screensBack) screen(s) back")
+                Log.event("refused (\(category)) — retrying \(earlier.offset) chars back")
                 explain(token: token, line: line, hint: hint, snapshot: earlier, completion: completion)
             }
         }
@@ -162,12 +163,14 @@ enum ClaudeClient {
     sense of the word is meant. Explain the terminology and nothing else — never write, \
     extend, fix, run or advise on the commands, code or output that happen to be visible.
 
-    Answer in 2–4 short sentences of plain prose. Always say what the word means first — even \
-    when the screen makes it obvious — then what it is doing in this particular context — the specific command, flag, path, error, or Claude Code \
-    session on screen. If the screen shows an error involving the word, say what caused it. \
-    Skip any preamble, do not repeat the word as a heading, and do not use markdown or bullet \
-    lists. Do not include internal or system XML tags in your response. If the screen gives you \
-    nothing useful, just define the word.
+    Answer in 2–4 short sentences of plain prose. Say what the word is and what it is doing \
+    here as one continuous explanation — not a general definition followed by a separate \
+    “Here it is …” sentence bolted on. Carry the meaning through the specifics on screen: the \
+    command it belongs to, the flag it modifies, the path it points at, the error it appears \
+    in, the Claude Code session around it. If the screen shows an error involving the word, \
+    say what caused it. Skip any preamble, do not repeat the word as a heading, and do not use \
+    markdown or bullet lists. Do not include internal or system XML tags in your response. If \
+    the screen gives you nothing useful, just define the word.
     """
 
     private static func userPrompt(token: String, line: String, hint: String?, snapshot: TerminalSnapshot) -> String {
