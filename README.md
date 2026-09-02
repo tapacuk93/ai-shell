@@ -49,13 +49,13 @@ that. ⌘-clicking a path may open it in Finder. Plain words are unaffected.
 
 ## What it explains
 
-Claude is given the word, the line it came from, and a thousand characters of *what is on the
-terminal screen* around it, and answers
-in 2–4 sentences. What the word is and what it is doing here come as one explanation rather
-than a definition with a “here it is…” sentence bolted on: the meaning is carried through the
-command it belongs to, the flag it modifies, the error it appears in. If the screen shows an
-interactive **Claude Code** session, the app detects that and says so, and slash commands,
-permission modes and status-line elements are read in that light.
+Claude is given the word, the line it came from, and two thousand characters of *what is on
+the terminal screen* around it, and answers in 2–4 sentences. What the word is and what it is
+doing here come as one explanation rather than a definition with a “here it is…” sentence
+bolted on: the meaning is carried through the command it belongs to, the flag it modifies,
+the error it appears in. If the screen shows an interactive **Claude Code** session, the app
+detects that and says so, and slash commands, permission modes and status-line elements are
+read in that light.
 
 A built-in glossary of ~190 CLI commands, shell builtins and terminal abbreviations (`awk`,
 `stdout`, `SIGTERM`, `rc`, `inode`, …) is passed along as a reference gloss when it has an
@@ -65,13 +65,13 @@ entry. It is a table lookup, so it grounds the answer without delaying the reque
 screen can carry security-shaped text — a pentest tool's output, an exploit in a file being
 edited, a log full of auth failures — that the clicked word has nothing to do with. Rather than
 give up on the context, a refusal is retried against an earlier screenful — and each rung of
-that ladder jumps back twice as far as the last: 3k, 6k, 12k, 24k, 48k, 96k, then 192k
+that ladder jumps back twice as far as the last: 6k, 12k, 24k, 48k, 96k, 192k, then 384k
 characters. The text either side of the current window is skipped, since it is usually a
 continuation of the same work and carries whatever got the request declined. Eight requests
-therefore reach a hundred and ninety-two thousand characters back. Whichever window answered is
-named in the header (`24k chars earlier`), since an answer read off older scrollback looks
-identical to one read off the current screen. If every rung is declined, the offline definition
-stands in.
+therefore reach three hundred and eighty-four thousand characters back. Whichever window
+answered is named in the header (`24k chars earlier`), since an answer read off older
+scrollback looks identical to one read off the current screen. If every rung is declined, the
+offline definition stands in.
 
 How far the ladder actually reaches depends on the terminal: it can only climb through the text
 the Accessibility API exposes, and some terminals hand over the visible screen and nothing more.

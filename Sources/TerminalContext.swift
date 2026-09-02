@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 
-/// A snapshot of the terminal when the user ⌘-clicks: a thousand characters of text, taken
+/// A snapshot of the terminal when the user ⌘-clicks: two thousand characters of text, taken
 /// from somewhere in whatever the Accessibility API hands over. `offset` slides that window
 /// back through the scrollback without changing its size.
 struct TerminalSnapshot {
@@ -17,10 +17,10 @@ struct TerminalSnapshot {
 
     /// How much text goes in one request, and how far the ladder can climb. The first retry
     /// jumps `firstStep` windows back and every one after that doubles — 0, 3, 6, 12, 24, 48,
-    /// 96, 192 windows — so eight rungs reach a hundred and ninety-two thousand characters
+    /// 96, 192 windows — so eight rungs reach three hundred and eighty-four thousand characters
     /// back. The windows either side of the current one are skipped: they are usually a
     /// continuation of the same work, carrying the same text that got the request declined.
-    static let windowLength = 1000
+    static let windowLength = 2000
     static let firstStep = 3
     static let maxRungs = 8
 
