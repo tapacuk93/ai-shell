@@ -42,9 +42,9 @@ enum ClaudeClient {
     /// A terminal screen can carry security-shaped text — a pentest tool's output, an exploit
     /// in a file being edited, a log full of auth failures — that the clicked word has nothing
     /// to do with, and the safety classifiers judge the request as a whole. So a refusal is
-    /// retried against an earlier window, each rung twice as far back as the last, until the
-    /// scrollback runs out: the context that explains the word is usually just above whatever
-    /// tripped the classifier.
+    /// retried: first with the window doubled in place, up to twenty thousand characters, since
+    /// a window that stops mid-exchange is the one most easily mistaken for the text around it;
+    /// then, that exhausted, against ever earlier windows until the scrollback runs out.
     static func explain(
         token: String,
         line: String,
@@ -62,13 +62,14 @@ enum ClaudeClient {
 
             case .failure(let error):
                 guard case .refused(let category)? = error as? ClientError,
-                      let earlier = snapshot.steppedBack()
+                      let retry = snapshot.enlarged() ?? snapshot.steppedBack()
                 else {
                     completion(.failure(error))
                     return
                 }
-                Log.event("refused (\(category)) — retrying \(earlier.offset) chars back")
-                explain(token: token, line: line, hint: hint, snapshot: earlier, completion: completion)
+                Log.event("refused (\(category)) — retrying with \(retry.length) chars, "
+                          + "\(retry.offset) back")
+                explain(token: token, line: line, hint: hint, snapshot: retry, completion: completion)
             }
         }
     }

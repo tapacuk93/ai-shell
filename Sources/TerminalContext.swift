@@ -1,9 +1,9 @@
 import AppKit
 import ApplicationServices
 
-/// A snapshot of the terminal when the user ⌘-clicks: two and a half thousand characters of
-/// text, taken from somewhere in whatever the Accessibility API hands over. `offset` slides
-/// that window back through the scrollback without changing its size.
+/// A snapshot of the terminal when the user ⌘-clicks: a couple of thousand characters of text,
+/// taken from somewhere in whatever the Accessibility API hands over. `offset` slides that
+/// window back through the scrollback; `length` grows it in place.
 struct TerminalSnapshot {
     let appName: String
     /// True when the visible screen looks like an interactive Claude Code session.
@@ -12,54 +12,83 @@ struct TerminalSnapshot {
     let history: String
     /// Characters between the end of the history and the end of the window being sent.
     let offset: Int
+    /// How much text this window holds. A declined request is retried with it doubled.
+    let length: Int
     /// The window itself — resolved once, since reading it walks the string.
     let screen: String
 
-    /// How much text goes in one request, and how far the ladder can climb. The first retry
-    /// jumps `firstStep` windows back and every one after that doubles — 0, 3, 6, 12, 24, 48,
-    /// 96, 192 windows — so eight rungs reach four hundred and eighty thousand characters back.
-    /// The windows either side of the current one are skipped: they are usually a continuation
-    /// of the same work, carrying the same text that got the request declined.
+    /// How much text the first request carries, and how far it can grow: a declined request is
+    /// retried with the window doubled in place — 2.5k, 5k, 10k, 20k characters — before the
+    /// ladder starts stepping back through the scrollback.
     static let windowLength = 2500
+    static let maxWindowLength = 20_000
+
+    /// How the step-back ladder climbs once the window has stopped growing. The first rung
+    /// jumps `firstStep` windows back and every one after that doubles — 0, 3, 6, 12, 24, 48,
+    /// 96, 192 windows. The windows either side of the current one are skipped: they are
+    /// usually a continuation of the same work, carrying the text that got the request
+    /// declined in the first place.
     static let firstStep = 3
     static let maxRungs = 8
 
-    /// The furthest rung, in characters.
-    static var deepestOffset: Int { (windowLength * firstStep) << (maxRungs - 2) }
+    /// The furthest rung this window can reach, in characters.
+    var deepestOffset: Int { (length * TerminalSnapshot.firstStep) << (TerminalSnapshot.maxRungs - 2) }
 
-    init(appName: String, claudeSession: Bool, history: String, offset: Int = 0) {
+    init(
+        appName: String,
+        claudeSession: Bool,
+        history: String,
+        offset: Int = 0,
+        length: Int = TerminalSnapshot.windowLength
+    ) {
         self.appName = appName
         self.claudeSession = claudeSession
         self.history = history
         self.offset = offset
-        self.screen = TerminalSnapshot.window(of: history, endingBack: offset)
+        self.length = length
+        self.screen = TerminalSnapshot.window(of: history, endingBack: offset, length: length)
     }
 
     var isEmpty: Bool { screen.trimmed.isEmpty }
 
     /// How far back the window sits, in windows. 0 is the text on screen now.
-    var windowsBack: Int { offset / TerminalSnapshot.windowLength }
+    var windowsBack: Int { offset / length }
+
+    /// The same spot, seen through twice as much text. A refusal is about the request as a
+    /// whole, and a window that stops mid-exchange can leave the clicked word looking like
+    /// the security-shaped text around it — so the first answer to a decline is more context,
+    /// not older context. Nil once the window has grown as far as it goes, or once it already
+    /// covers everything behind it.
+    func enlarged() -> TerminalSnapshot? {
+        guard length < TerminalSnapshot.maxWindowLength else { return nil }
+        let next = min(length * 2, TerminalSnapshot.maxWindowLength)
+        guard offset + length < history.count else { return nil }
+
+        return TerminalSnapshot(
+            appName: appName, claudeSession: claudeSession, history: history,
+            offset: offset, length: next)
+    }
 
     /// The next rung: twice as far back as this one. A declined request is retried against
     /// this rather than against nothing — the word was clicked in a context, and the context
     /// that explains it is usually above whatever tripped the classifier. Nil once the
     /// scrollback runs out, or once the ladder has climbed as far as it goes.
     func steppedBack() -> TerminalSnapshot? {
-        let next = offset == 0
-            ? TerminalSnapshot.windowLength * TerminalSnapshot.firstStep
-            : offset * 2
-        guard next < history.count, next <= TerminalSnapshot.deepestOffset else { return nil }
+        let next = offset == 0 ? length * TerminalSnapshot.firstStep : offset * 2
+        guard next < history.count, next <= deepestOffset else { return nil }
 
         let stepped = TerminalSnapshot(
-            appName: appName, claudeSession: claudeSession, history: history, offset: next)
+            appName: appName, claudeSession: claudeSession, history: history,
+            offset: next, length: length)
         return stepped.isEmpty ? nil : stepped
     }
 
-    /// One window of `history`, ending `back` characters before its end.
-    static func window(of history: String, endingBack back: Int) -> String {
+    /// One window of `history`, `length` characters long, ending `back` characters before its
+    /// end.
+    static func window(of history: String, endingBack back: Int, length: Int) -> String {
         guard back < history.count else { return "" }
         let end = history.index(history.endIndex, offsetBy: -back)
-        let start = history.index(end, offsetBy: -windowLength, limitedBy: history.startIndex)
+        let start = history.index(end, offsetBy: -length, limitedBy: history.startIndex)
             ?? history.startIndex
 
         var window = history[start..<end]

@@ -64,14 +64,18 @@ entry. It is a table lookup, so it grounds the answer without delaying the reque
 **Declined requests.** The safety classifiers judge the request as a whole, and a terminal
 screen can carry security-shaped text — a pentest tool's output, an exploit in a file being
 edited, a log full of auth failures — that the clicked word has nothing to do with. Rather than
-give up on the context, a refusal is retried against an earlier screenful — and each rung of
-that ladder jumps back twice as far as the last: 7.5k, 15k, 30k, 60k, 120k, 240k, then 480k
-characters. The text either side of the current window is skipped, since it is usually a
-continuation of the same work and carries whatever got the request declined. Eight requests
-therefore reach four hundred and eighty thousand characters back. Whichever window answered is
-named in the header (`24k chars earlier`), since an answer read off older scrollback looks
-identical to one read off the current screen. If every rung is declined, the offline
-definition stands in.
+give up on the context, a refusal is retried, in two stages.
+
+First the window grows where it stands, doubling each time: 5k, 10k, then 20k characters. A
+window that stops mid-exchange is the one most easily mistaken for the text around it, so the
+first answer to a decline is *more* context rather than older context.
+
+Then, once it has stopped growing, the window starts walking backwards, each rung twice as far
+back as the last: 60k, 120k, then 240k characters. The text either side of the current window
+is skipped, since it is usually a continuation of the same work and carries whatever got the
+request declined. Whichever window answered is named in the header (`24k chars earlier`), since
+an answer read off older scrollback looks identical to one read off the current screen. If
+every rung is declined, the offline definition stands in.
 
 How far the ladder actually reaches depends on the terminal: it can only climb through the text
 the Accessibility API exposes, and some terminals hand over the visible screen and nothing more.
