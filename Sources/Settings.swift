@@ -43,6 +43,13 @@ enum Settings {
         set { d.set(newValue, forKey: "didPromptForKey") }
     }
 
+    /// Set once the shortcuts card in the menu-bar popover has been closed. The popover's
+    /// sparkles icon flips it back.
+    static var didDismissShortcuts: Bool {
+        get { d.bool(forKey: "didDismissShortcuts") }
+        set { d.set(newValue, forKey: "didDismissShortcuts") }
+    }
+
     /// Send the word plus the visible terminal screen to the Anthropic API for a contextual answer.
     static var useClaude: Bool {
         get { d.object(forKey: "useClaude") as? Bool ?? true }

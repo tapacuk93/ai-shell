@@ -17,7 +17,7 @@ enum ClaudeClient {
         var errorDescription: String? {
             switch self {
             case .noKey:
-                return "No API key. Add one from the TermDefine menu bar icon → Set API key…"
+                return "No API key. Add one from the AI Shell menu bar icon → Set API key…"
             case .http(let status, let message):
                 return "Anthropic API error \(status): \(message)"
             case .refused(let category):
@@ -81,18 +81,6 @@ enum ClaudeClient {
         snapshot: TerminalSnapshot,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        guard let key = ApiKey.current() else {
-            completion(.failure(ClientError.noKey))
-            return
-        }
-
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 30
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.setValue(key, forHTTPHeaderField: "x-api-key")
-        request.setValue(apiVersion, forHTTPHeaderField: "anthropic-version")
-
         let body: [String: Any] = [
             "model": model,
             "max_tokens": 600,
@@ -105,6 +93,24 @@ enum ClaudeClient {
                 ["role": "user", "content": userPrompt(token: token, line: line, hint: hint, snapshot: snapshot)]
             ],
         ]
+        post(body, completion: completion)
+    }
+
+    /// One `POST /v1/messages`, answered on the main queue with the response's text.
+    static func post(_ body: [String: Any], beta: String? = nil, timeout: TimeInterval = 30,
+                     completion: @escaping (Result<String, Error>) -> Void) {
+        guard let key = ApiKey.current() else {
+            completion(.failure(ClientError.noKey))
+            return
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(key, forHTTPHeaderField: "x-api-key")
+        request.setValue(apiVersion, forHTTPHeaderField: "anthropic-version")
+        if let beta { request.setValue(beta, forHTTPHeaderField: "anthropic-beta") }
 
         guard let data = try? JSONSerialization.data(withJSONObject: body) else {
             completion(.failure(ClientError.malformed))

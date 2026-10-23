@@ -5,10 +5,14 @@ import Security
 /// The Keychain rather than UserDefaults — a preferences plist is readable by anything
 /// running as this user.
 enum Keychain {
-    private static let service = "com.oeaio.termdefine"
+    private static let service = "com.oeaio.aishell"
+    /// Where keys were kept before the app was renamed from TermDefine.
+    private static let legacyService = "com.oeaio.termdefine"
     private static let account = "ANTHROPIC_API_KEY"
 
-    private static var baseQuery: [String: Any] {
+    private static var baseQuery: [String: Any] { query(service: service) }
+
+    private static func query(service: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -16,8 +20,16 @@ enum Keychain {
         ]
     }
 
+    /// A key pasted under the old name is moved across the first time it is read.
     static func read() -> String? {
-        var query = baseQuery
+        if let value = read(service: service) { return value }
+        guard let legacy = read(service: legacyService) else { return nil }
+        if write(legacy) { SecItemDelete(query(service: legacyService) as CFDictionary) }
+        return legacy
+    }
+
+    private static func read(service: String) -> String? {
+        var query = query(service: service)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -37,7 +49,7 @@ enum Keychain {
         var attributes = baseQuery
         attributes[kSecValueData as String] = Data(value.utf8)
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        attributes[kSecAttrLabel as String] = "TermDefine — Anthropic API key"
+        attributes[kSecAttrLabel as String] = "AI Shell — Anthropic API key"
         return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
     }
 

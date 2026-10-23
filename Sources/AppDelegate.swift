@@ -7,6 +7,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let watcher = ClickWatcher()
     private let hotkeys = ScaleHotkeys()
     private let panel = DefinitionPanel()
+    private let popover = NSPopover()
+    private let shell = ShellPopover()
+
+    /// The app that was frontmost when the menu-bar icon was clicked — the one commands like
+    /// "close all windows but this" are about.
+    static var lastFrontmost: NSRunningApplication?
 
     // Context for the current popup, so chips can be re-looked-up without re-reading the screen.
     private var currentLine = ""
@@ -32,10 +38,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         _ = ApiKey.current()
 
-        if requestAccessibility() {
+        // Accessibility is asked for lazily: from the menu, or when a command first needs it.
+        // Until then the ⌘-click watcher waits, and picks up a grant made at any point.
+        if AXIsProcessTrusted() {
             startWatching()
         } else {
-            // The permission dialog is modal to the user, not to us — poll until granted.
             waitForAccessibility()
         }
 
@@ -56,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Permissions
 
     @discardableResult
-    private func requestAccessibility() -> Bool {
+    static func requestAccessibility() -> Bool {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
     }
@@ -88,11 +95,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func buildStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "text.book.closed", accessibilityDescription: "TermDefine")
+            button.image = NSImage(systemSymbolName: "apple.terminal", accessibilityDescription: "AI Shell")
             button.image?.isTemplate = true
+            button.target = self
+            button.action = #selector(statusClicked)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
-        statusItem.menu = NSMenu()
-        refreshMenu()
+        settingsMenu.delegate = self
+
+        popover.behavior = .transient
+        popover.contentViewController = shell
+        shell.onShowSettings = { [weak self] anchor in
+            guard let self else { return }
+            self.populate(self.settingsMenu)
+            self.settingsMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 4), in: anchor)
+        }
+    }
+
+    private let settingsMenu = NSMenu()
+
+    /// Left click opens the field; right click (or ⌃-click) the settings menu.
+    @objc private func statusClicked() {
+        guard let button = statusItem.button else { return }
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            popover.performClose(nil)
+            statusItem.menu = settingsMenu
+            button.performClick(nil)
+            statusItem.menu = nil
+            return
+        }
+
+        if popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+        // Read what is in front before activating, or the answer is always this app.
+        AppDelegate.lastFrontmost = NSWorkspace.shared.frontmostApplication
+        shell.snapshot = AXIsProcessTrusted() && AppDelegate.frontmostIsEligible()
+            ? TerminalContext.capture() : nil
+        panel.hide()
+        NSApp.activate(ignoringOtherApps: true)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 
     /// Repopulate on open so the trackpad diagnostic reflects the current state.
@@ -103,11 +147,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshMenu() {
-        let menu = statusItem.menu ?? NSMenu()
-        menu.removeAllItems()
-        populate(menu)
-        menu.delegate = self
-        statusItem.menu = menu
+        settingsMenu.removeAllItems()
+        populate(settingsMenu)
     }
 
     private func populate(_ menu: NSMenu) {
@@ -115,12 +156,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let status = NSMenuItem(
             title: AXIsProcessTrusted()
                 ? "⌘-click a word in your terminal"
-                : "Waiting for Accessibility permission…",
+                : "⌘-click lookups need Accessibility",
             action: nil, keyEquivalent: "")
         status.isEnabled = false
         menu.addItem(status)
 
-        if !watcher.isRunning {
+        if !watcher.isRunning, AXIsProcessTrusted() {
             let warning = NSMenuItem(
                 title: "Not listening — grant Accessibility, then reopen this menu",
                 action: nil, keyEquivalent: "")
@@ -150,11 +191,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if !AXIsProcessTrusted() {
             menu.addItem(.separator())
+            menu.addItem(NSMenuItem(title: "Enable ⌘-click lookups…", action: #selector(enableLookups), keyEquivalent: ""))
             menu.addItem(NSMenuItem(title: "Open Accessibility Settings…", action: #selector(openAccessibility), keyEquivalent: ""))
         }
 
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit TermDefine", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit AI Shell", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         for item in menu.items where item.action != nil && item.action != #selector(NSApplication.terminate(_:)) {
             item.target = self
@@ -235,6 +277,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             failure.informativeText = "Writing to the Keychain failed. Try again, or export ANTHROPIC_API_KEY in ~/.zshrc instead."
             failure.runModal()
         }
+    }
+
+    @objc private func enableLookups() {
+        AppDelegate.requestAccessibility()
     }
 
     @objc private func openAccessibility() {

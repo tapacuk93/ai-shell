@@ -1,7 +1,8 @@
-# TermDefine
+# AI Shell
 
-A macOS menu-bar app that explains the word under your pointer when you **⌘-click** it in a
-terminal — including inside TUIs like [Claude Code](https://claude.com/claude-code).
+A macOS menu-bar app with two halves: a field where you type what you want your Mac to do —
+*“close all windows but IntelliJ”* — and a **⌘-click** that explains the word under your
+pointer in a — including inside TUIs like [Claude Code](https://claude.com/claude-code).
 
 The popup shows one thing: Claude reading that word *in the context currently on your screen*.
 Not a dictionary entry that ignores where you are — what the word means, and what it is doing
@@ -18,6 +19,29 @@ in this command, on this line, in this error.
 │ files there that no longer exist locally. │
 └───────────────────────────────────────────┘
 ```
+
+## The field
+
+Click the menu-bar icon and type. A question is answered in place; a command comes back as a
+one-line summary plus the script that would carry it out (AppleScript, or zsh when that is the
+natural fit), and **↩** again runs it. Nothing runs until you have seen it. Editing the line
+throws the plan away.
+
+Claude is told which apps are running and which one was in front, so *“intellij”* resolves to
+IntelliJ IDEA and *“close”* means closing windows, not quitting. Windows are closed through
+System Events UI scripting, which works on apps with no scripting dictionary.
+
+**Permissions are asked for when they are first needed**, not at launch. Scripts run as child
+processes of the app, so macOS shows its *“AI Shell wants to control …”* prompt the first time
+a command touches each app. Closing windows needs Accessibility, and the dialog for it comes up
+the first time a command fails for want of it. Once a prompt has been answered *no*, only
+System Settings can change it, and the error says which pane.
+
+A **Shortcuts** card sits above the field until you close it; the ✦ icon in the field brings it
+back. The gear, or a right-click on the menu-bar icon, opens the settings.
+
+Commands use `claude-opus-5-5` at low effort with structured output, and the server-side
+refusal fallback.
 
 ## The gesture
 
@@ -93,18 +117,23 @@ look it up without touching the terminal again.
 
 ```sh
 ./build.sh
-open build/TermDefine.app
+open build/AIShell.app
 ```
 
-Requires the Xcode Command Line Tools (Swift 5.9+). Output: `build/TermDefine.app`,
-bundle ID `com.oeaio.termdefine`.
+Requires the Xcode Command Line Tools (Swift 5.9+). Output: `build/AIShell.app`,
+bundle ID `com.oeaio.aishell`.
 
 ## Permissions
 
-macOS will ask for **Accessibility** access on first launch (System Settings → Privacy &
-Security → Accessibility). It is needed to observe the click, read the selected text, and
-read the terminal window's contents. The app polls until the permission is granted, so you
-don't need to relaunch it.
+Nothing is asked for at launch. ⌘-click lookups need **Accessibility** (System Settings →
+Privacy & Security → Accessibility) to observe the click, read the selected text and read the
+terminal window's contents: choose **Enable ⌘-click lookups…** in the settings menu, or let a
+window-closing command bring the dialog up. The app polls for the grant, so you don't need to
+relaunch it. **Automation** prompts come up per app, the first time a command scripts it.
+
+The bundle ID changed from `com.oeaio.termdefine` to `com.oeaio.aishell` with the rename, so
+an Accessibility grant for the old app doesn't carry over; a key pasted into the old app is
+moved to the new Keychain entry on first read.
 
 The build is ad-hoc signed so the permission grant survives rebuilds.
 
@@ -144,6 +173,8 @@ Requests go to `POST /v1/messages` with `claude-opus-5`, thinking disabled at `l
 | Use ⌘C when needed | Allows the clipboard fallback when a terminal doesn't expose its selection over the Accessibility API. The previous clipboard contents are restored |
 | Explain with Claude | Off falls the panel back to offline definitions only |
 
+The menu opens from the gear in the popover, or by right-clicking the menu-bar icon.
+
 ## Dismissing the panel
 
 Click outside it, or press Esc. It has no timeout, and typing or scrolling in the terminal
@@ -164,19 +195,21 @@ leaves it alone — so it can sit there while you keep working.
 | `Sources/DefinitionPanel.swift` | The floating non-activating panel, and its ⌘+/⌘− scaling |
 | `Sources/ScaleHotkeys.swift` | Event tap that claims ⌘+/⌘− while the panel is open |
 | `Sources/ApiKey.swift`, `Keychain.swift` | Key discovery and Keychain storage |
+| `Sources/ShellPopover.swift` | The menu-bar popover: the field, the shortcuts card, plan and run |
+| `Sources/ShellCommand.swift` | Turns a typed line into an answer or a script, and runs it |
 | `Sources/AppDelegate.swift` | Menu bar, permissions, orchestration |
 
 ## Troubleshooting
 
-The menu's first line tells you whether the app is listening. If it says *"Waiting for
-Accessibility permission…"*, re-add it in System Settings → Privacy & Security →
+The menu's first line tells you whether the app is listening. If it says *"⌘-click lookups need
+Accessibility"* after you granted it, re-add it in System Settings → Privacy & Security →
 Accessibility — a stale entry can look enabled while being invalid, so remove it with **−**
 and add it again.
 
 For anything else, the app logs which path it took:
 
 ```sh
-log show --last 5m --predicate 'subsystem == "com.oeaio.termdefine"' --style compact
+log show --last 5m --predicate 'subsystem == "com.oeaio.aishell"' --style compact
 ```
 
 Only the word looked up and the code path are recorded — never the terminal contents.

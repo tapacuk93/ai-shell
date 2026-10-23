@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>TermDefine</string>
+    <string>AI Shell</string>
     <key>CFBundleDisplayName</key>
-    <string>TermDefine</string>
+    <string>AI Shell</string>
     <key>CFBundleIdentifier</key>
-    <string>com.oeaio.termdefine</string>
+    <string>com.oeaio.aishell</string>
     <key>CFBundleExecutable</key>
-    <string>TermDefine</string>
+    <string>AIShell</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -23,6 +23,6 @@
     <key>NSHumanReadableCopyright</key>
     <string></string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>TermDefine reads the selected word from the frontmost terminal window.</string>
+    <string>AI Shell runs the commands you type, such as closing other apps' windows, and reads the word you ⌘-click in a terminal.</string>
 </dict>
 </plist>
