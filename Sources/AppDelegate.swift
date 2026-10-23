@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let panel = DefinitionPanel()
     private let popover = NSPopover()
     private let shell = ShellPopover()
+    private let globalHotKeys = GlobalHotKeys()
 
     /// The app that was frontmost when the menu-bar icon was clicked — the one commands like
     /// "close all windows but this" are about.
@@ -35,6 +36,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotkeys.isActive = { [weak self] in self?.panel.isVisible ?? false }
         hotkeys.onZoomIn = { [weak self] in self?.panel.adjustScale(by: Settings.scaleStep) }
         hotkeys.onZoomOut = { [weak self] in self?.panel.adjustScale(by: -Settings.scaleStep) }
+
+        // Saved commands run from their shortcuts without opening anything.
+        globalHotKeys.onPressed = { [weak self] id in self?.shell.runSaved(id) }
+        globalHotKeys.register(ShellHistory.items)
+        ShellHistory.onChange = { [weak self] in
+            guard let self else { return }
+            self.globalHotKeys.register(ShellHistory.items)
+            self.shell.historyChanged()
+        }
 
         _ = ApiKey.current()
 
@@ -94,9 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func buildStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        applyStatusAppearance()
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "apple.terminal", accessibilityDescription: "AI Shell")
-            button.image?.isTemplate = true
             button.target = self
             button.action = #selector(statusClicked)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -110,9 +119,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.populate(self.settingsMenu)
             self.settingsMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 4), in: anchor)
         }
+        shell.onNeedsShowing = { [weak self] in self?.showPopover() }
     }
 
     private let settingsMenu = NSMenu()
+
+    /// Either a bare icon, or — the default — something that reads as a permanent input in the
+    /// menu bar. It is a button drawn like a field: clicking it opens the popover with its
+    /// real field focused, since a status-bar window doesn't take keyboard focus reliably.
+    private func applyStatusAppearance() {
+        guard let button = statusItem.button else { return }
+        button.wantsLayer = true
+        if Settings.inlineInput {
+            let icon = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "AI Shell")
+            icon?.isTemplate = true
+            button.image = icon
+            button.imagePosition = .imageLeading
+            button.attributedTitle = NSAttributedString(string: " e.g. close all windows", attributes: [
+                .font: NSFont.systemFont(ofSize: 12),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ])
+            button.alignment = .left
+            statusItem.length = 190
+            button.layer?.cornerRadius = 5
+            button.layer?.borderWidth = 1
+            button.layer?.borderColor = NSColor.tertiaryLabelColor.cgColor
+        } else {
+            let icon = NSImage(systemSymbolName: "apple.terminal", accessibilityDescription: "AI Shell")
+            icon?.isTemplate = true
+            button.image = icon
+            button.imagePosition = .imageOnly
+            button.title = ""
+            statusItem.length = NSStatusItem.variableLength
+            button.layer?.borderWidth = 0
+        }
+    }
+
+    @objc private func toggleInlineInput() {
+        Settings.inlineInput.toggle()
+        applyStatusAppearance()
+        refreshMenu()
+    }
 
     /// Left click opens the field; right click (or ⌃-click) the settings menu.
     @objc private func statusClicked() {
@@ -130,6 +177,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             popover.performClose(nil)
             return
         }
+        showPopover()
+    }
+
+    private func showPopover() {
+        guard let button = statusItem.button, !popover.isShown else { return }
         // Read what is in front before activating, or the answer is always this app.
         AppDelegate.lastFrontmost = NSWorkspace.shared.frontmostApplication
         shell.snapshot = AXIsProcessTrusted() && AppDelegate.frontmostIsEligible()
@@ -174,6 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(toggle("Enabled", selector: #selector(toggleEnabled), on: Settings.enabled))
         menu.addItem(toggle("Terminal apps only", selector: #selector(toggleTerminalOnly), on: Settings.terminalOnly))
         menu.addItem(toggle("Use ⌘C when needed", selector: #selector(toggleCopyFallback), on: Settings.allowCopyFallback))
+        menu.addItem(toggle("Show input in menu bar", selector: #selector(toggleInlineInput), on: Settings.inlineInput))
 
         menu.addItem(.separator())
         menu.addItem(toggle("Explain with Claude", selector: #selector(toggleClaude), on: Settings.useClaude))

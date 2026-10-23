@@ -20,6 +20,7 @@ swiftc \
     -framework AppKit \
     -framework ApplicationServices \
     -framework CoreServices \
+    -framework Carbon \
     -o "$APP/Contents/MacOS/AIShell" \
     "$DIR"/Sources/*.swift
 

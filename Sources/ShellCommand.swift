@@ -114,6 +114,11 @@ enum ShellCommand {
     desktop, or processes that are background only. Do not delete files, empty the Trash, \
     or use sudo unless the user asked for exactly that, and say so plainly in the summary \
     when a command is destructive. Keep scripts short and self-contained.
+
+    Scripts are saved and replayed later — from a history list or a keyboard shortcut — \
+    without asking you again, so write them to work at any time: find windows, processes \
+    and files when the script runs rather than naming the ones running now. The app list \
+    is only for resolving the names the user typed.
     """
 
     private static func userPrompt(_ input: String, snapshot: TerminalSnapshot?) -> String {

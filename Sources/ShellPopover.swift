@@ -1,12 +1,16 @@
 import AppKit
 
 /// What the menu-bar icon opens: a field that takes a question or a command, a shortcuts card
-/// shown until it is closed once, and the plan Claude made from the last line typed.
+/// shown until it is closed once, the plan made from the last line typed, and the commands
+/// that have run before.
 ///
-/// Return asks Claude; when the answer is a script, Return again (or Run) carries it out.
+/// Return asks Claude; when the answer is a script, Return again (or Run) carries it out. A
+/// line that has run before skips Claude and reuses its saved script.
 final class ShellPopover: NSViewController, NSTextFieldDelegate {
 
     var onShowSettings: ((NSView) -> Void)?
+    /// Asked to bring the popover up, for a shortcut run that needs to show an error.
+    var onNeedsShowing: (() -> Void)?
     /// The terminal screen captured when the popover opened, before this app took focus.
     var snapshot: TerminalSnapshot?
 
@@ -21,6 +25,12 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
     private var buttonRow: NSStackView!
     private var runButton: NSButton!
     private var settingsButton: NSButton!
+    private var recentHeader: NSTextField!
+    private var recentList: NSStackView!
+
+    /// The history item whose shortcut button is waiting for a key combination.
+    private var recording: UUID?
+    private var recordMonitor: Any?
 
     private var plan: ShellPlan?
     /// The line the current plan was made from, so Return runs it only while it still matches.
@@ -62,6 +72,17 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
         buttonRow.spacing = 8
         stack.addArrangedSubview(buttonRow)
 
+        recentHeader = NSTextField(labelWithString: "Recent")
+        recentHeader.font = .systemFont(ofSize: 11, weight: .semibold)
+        recentHeader.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(recentHeader)
+
+        recentList = NSStackView()
+        recentList.orientation = .vertical
+        recentList.alignment = .leading
+        recentList.spacing = 2
+        stack.addArrangedSubview(recentList)
+
         for view in stack.arrangedSubviews where view !== buttonRow {
             view.widthAnchor.constraint(equalToConstant: width - padding * 2).isActive = true
         }
@@ -69,7 +90,17 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
         scriptLabel.preferredMaxLayoutWidth = width - padding * 2
 
         view = stack
-        refresh()
+        rebuildRecent()
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        rebuildRecent()
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        stopRecording()
     }
 
     override func viewDidAppear() {
@@ -87,7 +118,7 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
         icon.toolTip = "Shortcuts"
 
         field = NSTextField()
-        field.placeholderString = "e.g. close all windows but IntelliJ"
+        field.placeholderString = "e.g. close all windows"
         field.font = .systemFont(ofSize: 13)
         field.bezelStyle = .roundedBezel
         field.focusRingType = .none
@@ -128,6 +159,7 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
             ("⌘-click in panel", "Follow a word in the answer"),
             ("⌘+  ⌘−", "Resize the answer panel"),
             ("Esc", "Dismiss the panel or this popover"),
+            ("Set shortcut", "Run a recent command from anywhere"),
             ("Right-click icon", "Settings"),
         ]
         let grid = NSGridView(views: rows.map { key, text in
@@ -167,6 +199,8 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
         buttonRow.isHidden = plan?.script == nil || busy
         runButton.isEnabled = !busy
         field.isEnabled = !busy
+        recentHeader.isHidden = recentList.arrangedSubviews.isEmpty
+        recentList.isHidden = recentList.arrangedSubviews.isEmpty
         preferredContentSize = stack.fittingSize
     }
 
@@ -198,6 +232,15 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
         guard !input.isEmpty, !busy else { return }
         if plan?.script != nil, input == plannedInput {
             runPlan()
+            return
+        }
+
+        // A line that has run before is already a script: no need to ask Claude again.
+        if let saved = ShellHistory.match(input) {
+            plan = saved.plan
+            plannedInput = input
+            scriptLabel.stringValue = saved.script
+            show("\(saved.summary)\n\nSaved script — press ↩ to run.")
             return
         }
 
@@ -235,20 +278,149 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
             switch result {
             case .success(let output):
                 Log.event("command ran")
+                ShellHistory.record(input: self.plannedInput, plan: plan)
                 self.plan = nil
                 self.field.stringValue = ""
                 self.show(output.isEmpty ? "Done." : output)
             case .failure(let error):
-                Log.event("command failed: \(error.localizedDescription)")
-                if case .needsAccessibility? = error as? ShellCommand.CommandError {
-                    AppDelegate.requestAccessibility()
-                } else if case .notAuthorized? = error as? ShellCommand.CommandError {
-                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
-                }
-                self.show(error.localizedDescription, error: true)
+                self.report(error)
             }
             self.view.window?.makeFirstResponder(self.field)
         }
+    }
+
+    /// Runs a saved command as it ran before — from its row, or from its global shortcut while
+    /// the popover is closed. Only a failure brings the popover up.
+    func runSaved(_ id: UUID) {
+        guard let item = ShellHistory.items.first(where: { $0.id == id }), !busy else { return }
+        busy = true
+        if view.window?.isVisible == true { show("Running “\(item.input)”…") }
+
+        ShellCommand.run(item.plan) { [weak self] result in
+            guard let self else { return }
+            self.busy = false
+            switch result {
+            case .success(let output):
+                Log.event("saved command ran")
+                ShellHistory.touch(id)
+                self.plan = nil
+                self.show(output.isEmpty ? "Done: \(item.input)" : output)
+            case .failure(let error):
+                self.onNeedsShowing?()
+                self.report(error)
+            }
+        }
+    }
+
+    private func report(_ error: Error) {
+        Log.event("command failed: \(error.localizedDescription)")
+        if case .needsAccessibility? = error as? ShellCommand.CommandError {
+            AppDelegate.requestAccessibility()
+        } else if case .notAuthorized? = error as? ShellCommand.CommandError {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
+        }
+        show(error.localizedDescription, error: true)
+    }
+
+    // MARK: - Recent commands
+
+    private func rebuildRecent() {
+        guard isViewLoaded else { return }
+        recentList.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for item in ShellHistory.items.prefix(8) {
+            recentList.addArrangedSubview(recentRow(item))
+        }
+        refresh()
+    }
+
+    private func recentRow(_ item: HistoryItem) -> NSView {
+        let run = RowButton(title: item.input, target: self, action: #selector(recentTapped(_:)))
+        run.identifier = NSUserInterfaceItemIdentifier(item.id.uuidString)
+        run.toolTip = item.summary
+        run.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        run.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let title = recording == item.id ? "Press keys…" : item.shortcut?.display ?? "Set shortcut"
+        let shortcut = NSButton(title: title, target: self, action: #selector(shortcutTapped(_:)))
+        shortcut.identifier = run.identifier
+        shortcut.bezelStyle = .inline
+        shortcut.controlSize = .small
+        shortcut.font = item.shortcut == nil && recording != item.id
+            ? .systemFont(ofSize: 10) : .monospacedSystemFont(ofSize: 10, weight: .medium)
+        shortcut.toolTip = "Run this from anywhere with a key combination. ⌫ clears it, Esc cancels."
+        shortcut.setContentHuggingPriority(.required, for: .horizontal)
+
+        let remove = NSButton(image: symbol("xmark", size: 8), target: self, action: #selector(removeTapped(_:)))
+        remove.identifier = run.identifier
+        remove.isBordered = false
+        remove.contentTintColor = .tertiaryLabelColor
+        remove.toolTip = "Forget this command"
+        remove.setContentHuggingPriority(.required, for: .horizontal)
+
+        let row = NSStackView(views: [run, shortcut, remove])
+        row.spacing = 6
+        row.alignment = .centerY
+        row.widthAnchor.constraint(equalToConstant: width - padding * 2).isActive = true
+        return row
+    }
+
+    private func itemID(_ sender: NSView) -> UUID? {
+        sender.identifier.flatMap { UUID(uuidString: $0.rawValue) }
+    }
+
+    @objc private func recentTapped(_ sender: NSButton) {
+        guard let id = itemID(sender) else { return }
+        stopRecording()
+        runSaved(id)
+    }
+
+    @objc private func removeTapped(_ sender: NSButton) {
+        guard let id = itemID(sender) else { return }
+        if recording == id { stopRecording() }
+        ShellHistory.remove(id)
+    }
+
+    /// Waits for the next key combination typed into the popover and binds it to the row.
+    @objc private func shortcutTapped(_ sender: NSButton) {
+        guard let id = itemID(sender) else { return }
+        if recording == id {
+            stopRecording()
+            return
+        }
+        stopRecording()
+        recording = id
+        recordMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, let id = self.recording else { return event }
+            switch Int(event.keyCode) {
+            case 53:  // esc
+                self.stopRecording()
+            case 51, 117:  // delete, forward delete
+                self.stopRecording()
+                ShellHistory.setShortcut(nil, for: id)
+            default:
+                guard let combo = GlobalHotKeys.combo(from: event) else {
+                    NSSound.beep()  // needs ⌘, ⌃ or ⌥
+                    return nil
+                }
+                self.stopRecording()
+                ShellHistory.setShortcut(combo, for: id)
+            }
+            return nil
+        }
+        rebuildRecent()
+    }
+
+    private func stopRecording() {
+        if let recordMonitor { NSEvent.removeMonitor(recordMonitor) }
+        recordMonitor = nil
+        guard recording != nil else { return }
+        recording = nil
+        rebuildRecent()
+    }
+
+    /// Called when the history changes anywhere, so the list stays current.
+    func historyChanged() {
+        rebuildRecent()
     }
 
     @objc private func clearPlan() {
@@ -261,5 +433,37 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
         guard plan != nil, field.stringValue.trimmed != plannedInput else { return }
         plan = nil
         show("")
+    }
+}
+
+/// A borderless, left-aligned button for one recent command that highlights under the pointer.
+private final class RowButton: NSButton {
+    init(title: String, target: AnyObject, action: Selector) {
+        super.init(frame: .zero)
+        self.title = title
+        self.target = target
+        self.action = action
+        isBordered = false
+        alignment = .left
+        lineBreakMode = .byTruncatingTail
+        font = .systemFont(ofSize: 12)
+        wantsLayer = true
+        layer?.cornerRadius = 5
+    }
+
+    required init?(coder: NSCoder) { fatalError("unused") }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        layer?.backgroundColor = nil
     }
 }

@@ -37,6 +37,15 @@ a command touches each app. Closing windows needs Accessibility, and the dialog 
 the first time a command fails for want of it. Once a prompt has been answered *no*, only
 System Settings can change it, and the error says which pane.
 
+**Every command that runs is saved, script and all**, under *Recent*. Clicking one runs its
+saved script again straight away, and typing a line that has run before brings its script back
+without asking Claude, so a scriptable action is only ever planned once. *Set shortcut* on a
+row records a global key combination (it needs ⌘, ⌃ or ⌥; ⌫ clears it, Esc cancels) that runs
+the command from anywhere, popover closed; only a failure opens it. Claude is told its scripts
+will be replayed, so it writes them to find windows and processes at run time instead of
+naming the ones open when it was asked. Shortcuts go through Carbon's `RegisterEventHotKey`,
+which needs no permission. Rows with a shortcut are never pushed out of the 30-item history.
+
 A **Shortcuts** card sits above the field until you close it; the ✦ icon in the field brings it
 back. The gear, or a right-click on the menu-bar icon, opens the settings.
 
@@ -172,6 +181,7 @@ Requests go to `POST /v1/messages` with `claude-opus-5`, thinking disabled at `l
 | Terminal apps only | Only react in Terminal, iTerm2, Warp, kitty, Alacritty, WezTerm, Ghostty, Hyper, … (on by default, so the gesture is inert in other apps) |
 | Use ⌘C when needed | Allows the clipboard fallback when a terminal doesn't expose its selection over the Accessibility API. The previous clipboard contents are restored |
 | Explain with Claude | Off falls the panel back to offline definitions only |
+| Show input in menu bar | The menu-bar item reads as a field (✦ e.g. close all windows) instead of a bare icon; clicking it opens the popover with the field focused. On by default |
 
 The menu opens from the gear in the popover, or by right-clicking the menu-bar icon.
 
@@ -197,6 +207,8 @@ leaves it alone — so it can sit there while you keep working.
 | `Sources/ApiKey.swift`, `Keychain.swift` | Key discovery and Keychain storage |
 | `Sources/ShellPopover.swift` | The menu-bar popover: the field, the shortcuts card, plan and run |
 | `Sources/ShellCommand.swift` | Turns a typed line into an answer or a script, and runs it |
+| `Sources/ShellHistory.swift` | Saved commands and their scripts, kept in UserDefaults |
+| `Sources/GlobalHotKeys.swift` | Global shortcuts for saved commands, and recording them |
 | `Sources/AppDelegate.swift` | Menu bar, permissions, orchestration |
 
 ## Troubleshooting

@@ -50,6 +50,12 @@ enum Settings {
         set { d.set(newValue, forKey: "didDismissShortcuts") }
     }
 
+    /// Show the menu-bar item as an input-shaped field rather than a bare icon.
+    static var inlineInput: Bool {
+        get { d.object(forKey: "inlineInput") as? Bool ?? true }
+        set { d.set(newValue, forKey: "inlineInput") }
+    }
+
     /// Send the word plus the visible terminal screen to the Anthropic API for a contextual answer.
     static var useClaude: Bool {
         get { d.object(forKey: "useClaude") as? Bool ?? true }
