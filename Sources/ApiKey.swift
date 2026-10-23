@@ -22,6 +22,12 @@ enum ApiKey {
 
     static var source: String = "not found"
 
+    /// For the menu: before the first request nothing has been read, so say what is likely.
+    static var displaySource: String {
+        if cached != nil { return source }
+        return hasStoredKey ? "pasted (Keychain), read on first use" : isLikelyAvailable ? "found, read on first use" : "not found"
+    }
+
     /// Persist a key the user pasted into the app. It outranks the shell files, because
     /// pasting is a deliberate act and a forgotten rc-file export shouldn't shadow it.
     @discardableResult
@@ -40,7 +46,18 @@ enum ApiKey {
         _ = current()
     }
 
-    static var hasStoredKey: Bool { Keychain.read() != nil }
+    static var hasStoredKey: Bool { Keychain.exists }
+
+    /// Whether some key is there to be found, without reading the Keychain item itself.
+    static var isLikelyAvailable: Bool {
+        if let cached { return cached != nil }
+        if Keychain.exists { return true }
+        let env = ProcessInfo.processInfo.environment
+        if ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"].contains(where: { !(env[$0] ?? "").trimmed.isEmpty }) {
+            return true
+        }
+        return shellFileKey() != nil
+    }
 
     private static func resolve() -> String? {
         for name in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
@@ -55,18 +72,22 @@ enum ApiKey {
             return stored
         }
 
-        let home = NSHomeDirectory()
-        let candidates = [".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bash_profile", ".bashrc", ".profile"]
-        for file in candidates {
-            let path = "\(home)/\(file)"
-            guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
-            if let key = extractKey(from: contents) {
-                source = "~/\(file)"
-                return key
-            }
+        if let (key, file) = shellFileKey() {
+            source = "~/\(file)"
+            return key
         }
 
         source = "not found"
+        return nil
+    }
+
+    private static func shellFileKey() -> (String, String)? {
+        let home = NSHomeDirectory()
+        let candidates = [".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bash_profile", ".bashrc", ".profile"]
+        for file in candidates {
+            guard let contents = try? String(contentsOfFile: "\(home)/\(file)", encoding: .utf8) else { continue }
+            if let key = extractKey(from: contents) { return (key, file) }
+        }
         return nil
     }
 

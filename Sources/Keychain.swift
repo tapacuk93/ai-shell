@@ -42,6 +42,20 @@ enum Keychain {
         return value.trimmed
     }
 
+    /// Whether a key is stored, without reading it. Reading an item that a differently signed
+    /// build wrote makes macOS ask for permission — and blocks until it is answered — whereas
+    /// asking for attributes alone never does. So launch and the menu use this, and the key
+    /// itself is read only when a request first needs it.
+    static var exists: Bool {
+        [service, legacyService].contains { service in
+            var query = query(service: service)
+            query[kSecReturnAttributes as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+            var item: CFTypeRef?
+            return SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess
+        }
+    }
+
     @discardableResult
     static func write(_ value: String) -> Bool {
         SecItemDelete(baseQuery as CFDictionary)

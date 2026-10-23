@@ -22,7 +22,16 @@ in this command, on this line, in this error.
 
 ## The field
 
-Click the menu-bar icon and type. A question is answered in place; a command comes back as a
+The field lives in the menu bar: click it and type. It is a real text field, not a picture of
+one. A status item's own window can't take keyboard focus (on current macOS it is drawn by
+another process), so the item only reserves the space and a small non-activating panel sits
+exactly over it, following it as other items come and go. Because the panel never activates
+the app, the app you were using stays in front while you type — which is what *“close all
+windows but this”* needs to know. Clicking it opens a popover underneath with the shortcuts
+card, the answer or plan, and *Recent*; Esc closes it and hands the keyboard back. With *Show
+input in menu bar* off, a plain icon opens the same popover with the field inside it.
+
+Type into it. A question is answered in place; a command comes back as a
 one-line summary plus the script that would carry it out (AppleScript, or zsh when that is the
 natural fit), and **↩** again runs it. Nothing runs until you have seen it. Editing the line
 throws the plan away.
@@ -165,7 +174,9 @@ than a preferences plist, which any process running as you could read. **Remove 
 deletes it; **Reload API key** re-reads all sources after you edit a shell file.
 
 Because the app is ad-hoc signed, its signature changes on every rebuild, so macOS may ask you
-to allow Keychain access again after `./build.sh`. Allow it once per build.
+to allow Keychain access again after `./build.sh`. Allow it once per build. The key is read
+only when the first request needs it — launch and the menu only ask whether one is stored,
+which never prompts — so that dialog can't hold up the app starting.
 
 Without a key the app still answers, but from the offline chain only — see *What it
 explains* above.
@@ -181,7 +192,7 @@ Requests go to `POST /v1/messages` with `claude-opus-5`, thinking disabled at `l
 | Terminal apps only | Only react in Terminal, iTerm2, Warp, kitty, Alacritty, WezTerm, Ghostty, Hyper, … (on by default, so the gesture is inert in other apps) |
 | Use ⌘C when needed | Allows the clipboard fallback when a terminal doesn't expose its selection over the Accessibility API. The previous clipboard contents are restored |
 | Explain with Claude | Off falls the panel back to offline definitions only |
-| Show input in menu bar | The menu-bar item reads as a field (✦ e.g. close all windows) instead of a bare icon; clicking it opens the popover with the field focused. On by default |
+| Show input in menu bar | A real text field in the menu bar (on by default); off shows a plain icon that opens the popover with the field inside it |
 
 The menu opens from the gear in the popover, or by right-clicking the menu-bar icon.
 
@@ -205,6 +216,7 @@ leaves it alone — so it can sit there while you keep working.
 | `Sources/DefinitionPanel.swift` | The floating non-activating panel, and its ⌘+/⌘− scaling |
 | `Sources/ScaleHotkeys.swift` | Event tap that claims ⌘+/⌘− while the panel is open |
 | `Sources/ApiKey.swift`, `Keychain.swift` | Key discovery and Keychain storage |
+| `Sources/MenuBarField.swift` | The real text field in the menu bar, a panel kept over the status item |
 | `Sources/ShellPopover.swift` | The menu-bar popover: the field, the shortcuts card, plan and run |
 | `Sources/ShellCommand.swift` | Turns a typed line into an answer or a script, and runs it |
 | `Sources/ShellHistory.swift` | Saved commands and their scripts, kept in UserDefaults |

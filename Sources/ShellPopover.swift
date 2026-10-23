@@ -19,7 +19,10 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
 
     private var stack: NSStackView!
     private var shortcutsCard: NSView!
+    /// The field being typed into: the popover's own, or the one living in the menu bar.
     private var field: NSTextField!
+    private var ownField: NSTextField!
+    private var rowSpacer: NSView!
     private var resultLabel: NSTextField!
     private var scriptLabel: NSTextField!
     private var buttonRow: NSStackView!
@@ -105,7 +108,27 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
 
     override func viewDidAppear() {
         super.viewDidAppear()
-        view.window?.makeFirstResponder(field)
+        focusField()
+    }
+
+    /// Types into `external` — the menu-bar field — instead of the popover's own field, or back
+    /// into the popover's own when nil.
+    func useField(_ external: NSTextField?) {
+        _ = view
+        let target = external ?? ownField!
+        if field !== target {
+            target.stringValue = field.stringValue
+        }
+        field = target
+        field.delegate = self
+        field.target = self
+        field.action = #selector(submit)
+        ownField.isHidden = external != nil
+        rowSpacer.isHidden = external == nil
+    }
+
+    private func focusField() {
+        field.window?.makeFirstResponder(field)
     }
 
     // MARK: - Pieces
@@ -118,6 +141,7 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
         icon.toolTip = "Shortcuts"
 
         field = NSTextField()
+        ownField = field
         field.placeholderString = "e.g. close all windows"
         field.font = .systemFont(ofSize: 13)
         field.bezelStyle = .roundedBezel
@@ -132,7 +156,12 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
         settingsButton.contentTintColor = .secondaryLabelColor
         settingsButton.toolTip = "Settings"
 
-        let row = NSStackView(views: [icon, field, settingsButton])
+        // Stands in for the field when typing happens in the menu bar, keeping the gear right.
+        rowSpacer = NSView()
+        rowSpacer.isHidden = true
+        rowSpacer.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+
+        let row = NSStackView(views: [icon, field, rowSpacer, settingsButton])
         row.spacing = 6
         row.alignment = .centerY
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -263,7 +292,7 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
                 Log.event("planning failed: \(error.localizedDescription)")
                 self.show(error.localizedDescription, error: true)
             }
-            self.view.window?.makeFirstResponder(self.field)
+            self.focusField()
         }
     }
 
@@ -285,7 +314,7 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
             case .failure(let error):
                 self.report(error)
             }
-            self.view.window?.makeFirstResponder(self.field)
+            self.focusField()
         }
     }
 
@@ -426,6 +455,20 @@ final class ShellPopover: NSViewController, NSTextFieldDelegate {
     @objc private func clearPlan() {
         plan = nil
         show("")
+    }
+
+    /// Esc in the field. A text field's editor treats Esc as "complete", so it never reaches
+    /// the window and has to be caught here.
+    var onEscape: (() -> Void)?
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        if recording != nil {
+            stopRecording()
+        } else {
+            onEscape?()
+        }
+        return true
     }
 
     /// Typing after a plan was made means a new request, so the old plan stops being runnable.

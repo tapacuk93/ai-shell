@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSPopoverDelegate {
 
     private var statusItem: NSStatusItem!
     private let watcher = ClickWatcher()
@@ -46,7 +46,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.shell.historyChanged()
         }
 
-        _ = ApiKey.current()
 
         // Accessibility is asked for lazily: from the menu, or when a command first needs it.
         // Until then the ⌘-click watcher waits, and picks up a grant made at any point.
@@ -57,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         // Offer the paste dialog once when there's nothing to authenticate with.
-        if Settings.useClaude, ApiKey.current() == nil, !Settings.didPromptForKey {
+        if Settings.useClaude, !ApiKey.isLikelyAvailable, !Settings.didPromptForKey {
             Settings.didPromptForKey = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 self?.showKeyPrompt()
@@ -114,36 +113,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         popover.behavior = .transient
         popover.contentViewController = shell
+        popover.delegate = self
         shell.onShowSettings = { [weak self] anchor in
             guard let self else { return }
             self.populate(self.settingsMenu)
             self.settingsMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 4), in: anchor)
         }
         shell.onNeedsShowing = { [weak self] in self?.showPopover() }
+        shell.onEscape = { [weak self] in
+            guard let self else { return }
+            if self.menuBarField != nil { self.dismissField() } else { self.popover.performClose(nil) }
+        }
     }
 
     private let settingsMenu = NSMenu()
 
-    /// Either a bare icon, or — the default — something that reads as a permanent input in the
-    /// menu bar. It is a button drawn like a field: clicking it opens the popover with its
-    /// real field focused, since a status-bar window doesn't take keyboard focus reliably.
+    /// The menu-bar input, when it is on.
+    private var menuBarField: MenuBarField?
+    private var outsideClicks: Any?
+
+    /// Either a real text field in the menu bar — the default — or a bare icon that opens the
+    /// popover with its own field.
     private func applyStatusAppearance() {
         guard let button = statusItem.button else { return }
-        button.wantsLayer = true
+        menuBarField?.remove()
+        menuBarField = nil
+
         if Settings.inlineInput {
-            let icon = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "AI Shell")
-            icon?.isTemplate = true
-            button.image = icon
-            button.imagePosition = .imageLeading
-            button.attributedTitle = NSAttributedString(string: " e.g. close all windows", attributes: [
-                .font: NSFont.systemFont(ofSize: 12),
-                .foregroundColor: NSColor.secondaryLabelColor,
-            ])
-            button.alignment = .left
-            statusItem.length = 190
-            button.layer?.cornerRadius = 5
-            button.layer?.borderWidth = 1
-            button.layer?.borderColor = NSColor.tertiaryLabelColor.cgColor
+            let bar = MenuBarField(statusItem: statusItem)
+            bar.anchorView.menu = settingsMenu  // right-click beside the text
+            bar.onFocus = { [weak self] in self?.showPopover() }
+            bar.onCancel = { [weak self] in self?.dismissField() }
+            menuBarField = bar
+            shell.useField(bar.field)
         } else {
             let icon = NSImage(systemSymbolName: "apple.terminal", accessibilityDescription: "AI Shell")
             icon?.isTemplate = true
@@ -151,8 +153,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             button.imagePosition = .imageOnly
             button.title = ""
             statusItem.length = NSStatusItem.variableLength
-            button.layer?.borderWidth = 0
+            shell.useField(nil)
         }
+    }
+
+    /// Esc in the menu-bar field: close everything and hand the keyboard back to the app that
+    /// was in front, since a non-activating panel otherwise keeps it.
+    private func dismissField() {
+        popover.performClose(nil)
+        menuBarField?.field.stringValue = ""
+        menuBarField?.blur()
+        AppDelegate.lastFrontmost?.activate()
     }
 
     @objc private func toggleInlineInput() {
@@ -181,14 +192,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func showPopover() {
-        guard let button = statusItem.button, !popover.isShown else { return }
-        // Read what is in front before activating, or the answer is always this app.
-        AppDelegate.lastFrontmost = NSWorkspace.shared.frontmostApplication
-        shell.snapshot = AXIsProcessTrusted() && AppDelegate.frontmostIsEligible()
-            ? TerminalContext.capture() : nil
+        guard !popover.isShown else { return }
+        // Read what is in front first. The menu-bar field never activates this app, so this
+        // is still the app being used; the icon path reads it before activating.
+        let front = NSWorkspace.shared.frontmostApplication
+        if front?.bundleIdentifier != Bundle.main.bundleIdentifier {
+            AppDelegate.lastFrontmost = front
+            shell.snapshot = AXIsProcessTrusted() && AppDelegate.frontmostIsEligible()
+                ? TerminalContext.capture() : nil
+        }
         panel.hide()
-        NSApp.activate(ignoringOtherApps: true)
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+
+        if let bar = menuBarField {
+            // Closed by Esc or a click in another app; clicks in the field itself keep it open.
+            popover.behavior = .applicationDefined
+            popover.show(relativeTo: bar.anchorView.bounds, of: bar.anchorView, preferredEdge: .minY)
+            if !bar.hasFocus { bar.focus() }
+            outsideClicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+                self?.popover.performClose(nil)
+            }
+        } else if let button = statusItem.button {
+            popover.behavior = .transient
+            NSApp.activate(ignoringOtherApps: true)
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        if let outsideClicks { NSEvent.removeMonitor(outsideClicks) }
+        outsideClicks = nil
     }
 
     /// Repopulate on open so the trackpad diagnostic reflects the current state.
@@ -231,7 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(toggle("Explain with Claude", selector: #selector(toggleClaude), on: Settings.useClaude))
 
-        let keyItem = NSMenuItem(title: "API key: \(ApiKey.source)", action: nil, keyEquivalent: "")
+        let keyItem = NSMenuItem(title: "API key: \(ApiKey.displaySource)", action: nil, keyEquivalent: "")
         keyItem.isEnabled = false
         menu.addItem(keyItem)
         menu.addItem(NSMenuItem(
